@@ -1,0 +1,13 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Application sans système de connexion (lien partagé entre Mikael et Myriam).
+    // Accès ouvert en lecture/écriture, limité aux deux collections utilisées par l'app.
+    match /items/{itemId} {
+      allow read, write: if true;
+    }
+    match /counters/{counterId} {
+      allow read, write: if true;
+    }
+  }
+}
