@@ -28,6 +28,12 @@ header{padding:10px 12px;background:var(--panel);border-bottom:1px solid var(--l
 .volet-btn[data-v="deneige"].active{background:var(--deneige)}
 .volet-btn[data-v="insp"].active{background:var(--insp)}
 .volet-btn[data-v="tous"].active{background:#555}
+.modeles-row{display:flex;flex-wrap:wrap;gap:6px;padding:2px 0 2px}
+.modele-chip{flex:0 0 auto;display:flex;align-items:center;gap:5px;padding:6px 10px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);font-size:12px;font-weight:600;cursor:grab;touch-action:none;user-select:none}
+.modele-chip.add{border-style:dashed;color:var(--muted);cursor:pointer}
+.modele-chip.dragging{opacity:.35}
+.modele-ghost{position:fixed;z-index:2000;background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:6px 12px;font-size:12px;font-weight:700;pointer-events:none;transform:translate(-50%,-120%);box-shadow:0 6px 18px rgba(0,0,0,.5);white-space:nowrap}
+#map.drop-hover{outline:3px dashed var(--accent);outline-offset:-3px}
 .iconbtn{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:8px 10px;font-size:13px;cursor:pointer}
 .iconbtn.primary{background:var(--accent);border-color:transparent;color:#fff;font-weight:700}
 #map{position:absolute;inset:0;overflow:hidden;background:#1b2a22}
@@ -92,6 +98,7 @@ a{color:var(--accent)}
       <button class="volet-btn" data-v="deneige">Déneigement</button>
       <button class="volet-btn" data-v="insp">Inspections</button>
     </div>
+    <div class="modeles-row" id="modelesRow"></div>
   </header>
   <div style="position:relative;flex:1;min-height:0">
     <div id="map"></div>
@@ -143,16 +150,17 @@ const STATUT_OPTIONS = {
   deneige: [['en_place','Couvert'],['a_confirmer','À confirmer'],['manquant','Manquant'],['termine','Terminé']],
   insp:    [['actif','Actif'],['en_retard','En retard'],['termine','Terminé']]
 };
-function statutColor(volet, statut){
+function statutColor(volet, statut, modeleColor){
   if(statut==='retiree'||statut==='termine') return '#6b7280';
   if(statut==='manquant'||statut==='en_retard') return '#e65c5c';
   if(statut==='a_verifier'||statut==='a_retirer'||statut==='a_confirmer') return '#e8a23d';
-  return VOLET_COLORS[volet]||'#4f8cff';
+  return modeleColor || VOLET_COLORS[volet] || '#4f8cff';
 }
 
 /* ---------- State ---------- */
-let items=[]; // {id, volet, numero, lat, lng, statut, createdAt, fields:{...}, photoId, photoUrl}
-let unsubscribe=null;
+let items=[]; // {id, volet, numero, lat, lng, statut, createdAt, fields:{...}, photoId, photoUrl, modele:{id,label,emoji,color}}
+let modeles=[]; // {id, volet, label, emoji, color}
+let unsubscribe=null, modelesUnsub=null;
 let currentVolet='tous';
 let pendingLatLng=null;
 
@@ -180,16 +188,142 @@ function renderMarkers(){
   markersLayer.clearLayers();
   visibleItems().forEach(it=>{
     if(it.lat==null||it.lng==null) return;
-    const color = statutColor(it.volet, it.statut);
+    const color = statutColor(it.volet, it.statut, it.modele&&it.modele.color);
+    const emoji = (it.modele&&it.modele.emoji) ? esc(it.modele.emoji)+' ' : '';
     const icon = L.divIcon({
       className:'',
-      html:`<div class="pin-label" style="transform:translateY(-26px)">#${esc(it.numero)}</div>
+      html:`<div class="pin-label" style="transform:translateY(-26px)">${emoji}#${esc(it.numero)}</div>
             <div style="width:22px;height:22px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:3px solid #fff;background:${color};box-shadow:0 2px 6px rgba(0,0,0,.6)"></div>`,
       iconSize:[22,22], iconAnchor:[11,22]
     });
     const marker = L.marker([it.lat, it.lng], {icon}).addTo(markersLayer);
     marker.on('click', ()=> openDetail(it.id));
   });
+}
+
+/* ---------- Modèles de pancarte (palette glisser-déposer) ---------- */
+function modelesForView(){
+  if(currentVolet==='tous') return modeles.slice().sort((a,b)=>a.volet.localeCompare(b.volet));
+  return modeles.filter(m=>m.volet===currentVolet);
+}
+function renderPalette(){
+  const wrap = document.getElementById('modelesRow');
+  const list = modelesForView();
+  wrap.innerHTML = list.map(m=>`
+    <div class="modele-chip" data-id="${esc(m.id)}" style="border-left:4px solid ${esc(VOLET_COLORS[m.volet]||'#555')}">
+      <span>${esc(m.emoji||'🪧')}</span><span>${esc(m.label)}</span>
+    </div>`).join('') + `<div class="modele-chip add" id="btnAddModele">+ Modèle</div>`;
+  [...wrap.querySelectorAll('.modele-chip:not(.add)')].forEach(chip=>{
+    chip.addEventListener('pointerdown', (e)=>{
+      const m = list.find(x=>x.id===chip.dataset.id);
+      if(m) startDragModele(e, m, chip);
+    });
+  });
+  const btnAdd = document.getElementById('btnAddModele');
+  if(btnAdd) btnAdd.onclick = openAddModeleForm;
+}
+
+let dragGhost=null;
+function moveGhost(x,y){ if(dragGhost){ dragGhost.style.left=x+'px'; dragGhost.style.top=y+'px'; } }
+function startDragModele(e, modele, chipEl){
+  e.preventDefault();
+  chipEl.classList.add('dragging');
+  dragGhost = document.createElement('div');
+  dragGhost.className = 'modele-ghost';
+  dragGhost.innerHTML = `${esc(modele.emoji||'🪧')} ${esc(modele.label)}`;
+  document.body.appendChild(dragGhost);
+  moveGhost(e.clientX, e.clientY);
+  const mapEl = document.getElementById('map');
+  function isOverMap(ev){
+    const r = mapEl.getBoundingClientRect();
+    return ev.clientX>=r.left && ev.clientX<=r.right && ev.clientY>=r.top && ev.clientY<=r.bottom;
+  }
+  function onMove(ev){
+    moveGhost(ev.clientX, ev.clientY);
+    mapEl.classList.toggle('drop-hover', isOverMap(ev));
+  }
+  function onUp(ev){
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    window.removeEventListener('pointercancel', onUp);
+    chipEl.classList.remove('dragging');
+    mapEl.classList.remove('drop-hover');
+    if(dragGhost){ dragGhost.remove(); dragGhost=null; }
+    if(isOverMap(ev)){
+      const r = mapEl.getBoundingClientRect();
+      const latlng = map.containerPointToLatLng(L.point(ev.clientX-r.left, ev.clientY-r.top));
+      pendingLatLng = {lat:latlng.lat, lng:latlng.lng};
+      openForm(null, pendingLatLng, modele);
+    }
+  }
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+  window.addEventListener('pointercancel', onUp);
+}
+
+function populateModeleSelect(volet, selectedId){
+  const sel = document.getElementById('f_modele');
+  if(!sel) return;
+  const opts = modeles.filter(m=>m.volet===volet);
+  sel.innerHTML = `<option value="">Aucun modèle</option>` + opts.map(m=>
+    `<option value="${esc(m.id)}" ${m.id===selectedId?'selected':''}>${esc(m.emoji||'')} ${esc(m.label)}</option>`).join('');
+}
+
+function openAddModeleForm(){
+  const fixedVolet = currentVolet==='tous' ? null : currentVolet;
+  sheet.innerHTML = `
+    <div class="sheet-head"><h2>Nouveau modèle de pancarte</h2><button class="iconbtn" id="btnCloseSheet">✕</button></div>
+    ${!fixedVolet ? `
+    <label>Volet</label>
+    <select id="nm_volet">${Object.entries(VOLET_LABELS).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>` : `<div class="badge" style="margin-bottom:6px">${esc(VOLET_LABELS[fixedVolet])}</div>`}
+    <label>Emoji / icône</label>
+    <input type="text" id="nm_emoji" maxlength="4" placeholder="🪧">
+    <label>Nom du modèle</label>
+    <input type="text" id="nm_label" placeholder="Ex: Pancarte Remax 4x8">
+    <div class="btnrow">
+      <button class="btn-cancel" id="btnCancel">Annuler</button>
+      <button class="btn-save" id="btnSaveModele">Ajouter</button>
+    </div>
+  `;
+  overlay.classList.add('open');
+  document.getElementById('btnCloseSheet').onclick = closeSheet;
+  document.getElementById('btnCancel').onclick = closeSheet;
+  document.getElementById('btnSaveModele').onclick = async ()=>{
+    const v = fixedVolet || document.getElementById('nm_volet').value;
+    const label = document.getElementById('nm_label').value.trim();
+    const emoji = document.getElementById('nm_emoji').value.trim() || '🪧';
+    if(!label){ toast('Donne un nom au modèle.'); return; }
+    const id = uid();
+    try{
+      await db.collection('modeles').doc(id).set({ id, volet:v, label, emoji, color:VOLET_COLORS[v], createdAt:Date.now() });
+      toast('Modèle ajouté — glisse-le sur la carte.');
+      closeSheet();
+    }catch(err){ toast('Erreur: '+(err&&err.message||'inconnue')); }
+  };
+}
+
+function seedDefaultModeles(){
+  const defaults = [
+    {id:'default_vente_avendre', volet:'vente', label:'À vendre', emoji:'🏷️'},
+    {id:'default_vente_vendue', volet:'vente', label:'Vendue / Réservée', emoji:'✅'},
+    {id:'default_pub_4x8', volet:'pub', label:'Pancarte 4 x 8', emoji:'🪧'},
+    {id:'default_pub_autre', volet:'pub', label:'Autre format', emoji:'📐'},
+    {id:'default_pub_remorque', volet:'pub', label:'Remorque lettrée', emoji:'🚛'},
+    {id:'default_deneige_standard', volet:'deneige', label:'Affiche déneigement', emoji:'❄️'},
+    {id:'default_insp_standard', volet:'insp', label:'Affiche inspection', emoji:'🔍'}
+  ];
+  defaults.forEach(m=>{
+    db.collection('modeles').doc(m.id).set({ ...m, color:VOLET_COLORS[m.volet], createdAt:Date.now() }, {merge:true}).catch(()=>{});
+  });
+}
+
+function initModelesDb(){
+  if(modelesUnsub) modelesUnsub();
+  modelesUnsub = db.collection('modeles').onSnapshot((snap)=>{
+    modeles = snap.docs.map(d=>d.data()).filter(Boolean);
+    if(modeles.length===0) seedDefaultModeles();
+    renderPalette();
+  }, ()=>{ /* palette reste simplement vide si indisponible */ });
 }
 
 function itemSubtitle(it){
@@ -215,11 +349,12 @@ function renderList(filter){
   }
   if(list.length===0){ wrap.innerHTML = `<div class="muted" style="padding:20px;text-align:center">Aucun élément.</div>`; return; }
   wrap.innerHTML = list.map(it=>{
-    const color = statutColor(it.volet, it.statut);
+    const color = statutColor(it.volet, it.statut, it.modele&&it.modele.color);
+    const emoji = (it.modele&&it.modele.emoji) ? esc(it.modele.emoji)+' ' : '';
     return `<div class="item-row" data-id="${it.id}">
       <div class="dot" style="background:${color}"></div>
       <div class="meta">
-        <div class="num">#${esc(it.numero)} <span class="badge">${esc(VOLET_LABELS[it.volet])}</span></div>
+        <div class="num">${emoji}#${esc(it.numero)} <span class="badge">${esc(VOLET_LABELS[it.volet])}</span></div>
         <div class="sub">${esc(itemSubtitle(it))}</div>
       </div>
     </div>`;
@@ -234,7 +369,7 @@ document.getElementById('volets').addEventListener('click', (e)=>{
   const btn = e.target.closest('.volet-btn'); if(!btn) return;
   currentVolet = btn.dataset.v;
   [...document.querySelectorAll('.volet-btn')].forEach(b=>b.classList.toggle('active', b===btn));
-  renderMarkers(); renderList(document.getElementById('searchBox').value);
+  renderMarkers(); renderList(document.getElementById('searchBox').value); renderPalette();
 });
 document.querySelector('.volet-btn[data-v="tous"]').classList.add('active');
 
@@ -404,15 +539,17 @@ async function uploadToCloudinary(file){
 }
 
 /* ---------- Open form (create / edit) ---------- */
-function openForm(existing, latlng){
-  const volet = existing ? existing.volet : (currentVolet==='tous' ? 'vente' : currentVolet);
+function openForm(existing, latlng, modelePrefill){
+  const volet = existing ? existing.volet : (modelePrefill ? modelePrefill.volet : (currentVolet==='tous' ? 'vente' : currentVolet));
+  const lockVolet = !!(existing || modelePrefill);
   const statutOpts = STATUT_OPTIONS[volet].map(([v,l])=>`<option value="${v}" ${existing&&existing.statut===v?'selected':''}>${l}</option>`).join('');
+  const existingModeleId = existing && existing.modele ? existing.modele.id : (modelePrefill ? modelePrefill.id : '');
   sheet.innerHTML = `
     <div class="sheet-head">
       <h2>${existing?('Modifier #'+esc(existing.numero)):'Nouvel élément'}</h2>
       <button class="iconbtn" id="btnCloseSheet">✕</button>
     </div>
-    ${!existing ? `
+    ${!lockVolet ? `
     <label>Volet</label>
     <select id="f_volet">
       ${Object.entries(VOLET_LABELS).map(([v,l])=>`<option value="${v}" ${v===volet?'selected':''}>${l}</option>`).join('')}
@@ -421,9 +558,11 @@ function openForm(existing, latlng){
       <div><label>Latitude</label><input type="text" id="f_lat" value="${latlng?latlng.lat.toFixed(6):(existing?existing.lat:'')}"></div>
       <div><label>Longitude</label><input type="text" id="f_lng" value="${latlng?latlng.lng.toFixed(6):(existing?existing.lng:'')}"></div>
     </div>
-    <div class="hint">Touche la carte à l'endroit voulu, ou utilise 📍 pour ta position actuelle, puis ajuste ici au besoin.</div>
+    <div class="hint">Touche la carte à l'endroit voulu, glisse un modèle de pancarte dessus, ou utilise 📍 pour ta position actuelle.</div>
     <label>Statut</label>
     <select id="f_statut">${statutOpts}</select>
+    <label>Modèle (type de pancarte)</label>
+    <select id="f_modele"></select>
     <div id="dynFields">${fieldsHtml(volet, existing?existing.fields:{})}</div>
     <label>Photo</label>
     <input type="file" id="f_photo" accept="image/*" capture="environment">
@@ -439,6 +578,7 @@ function openForm(existing, latlng){
   overlay.classList.add('open');
   document.getElementById('btnCloseSheet').onclick = closeSheet;
   document.getElementById('btnCancel').onclick = closeSheet;
+  populateModeleSelect(volet, existingModeleId);
   const voletSelect = document.getElementById('f_volet');
   if(voletSelect){
     voletSelect.onchange = ()=>{
@@ -446,6 +586,7 @@ function openForm(existing, latlng){
       document.getElementById('dynFields').innerHTML = fieldsHtml(v, {});
       const stSel = document.getElementById('f_statut');
       stSel.innerHTML = STATUT_OPTIONS[v].map(([vv,l])=>`<option value="${vv}">${l}</option>`).join('');
+      populateModeleSelect(v, '');
     };
   }
   let pendingPhotoFile = null;
@@ -470,6 +611,8 @@ function openForm(existing, latlng){
     const statut = document.getElementById('f_statut').value;
     const notes = document.getElementById('f_notes').value;
     const fields = readFields(v);
+    const modeleId = document.getElementById('f_modele').value;
+    const modele = modeleId ? (modeles.find(m=>m.id===modeleId) ? {id:modeleId, label:modeles.find(m=>m.id===modeleId).label, emoji:modeles.find(m=>m.id===modeleId).emoji, color:modeles.find(m=>m.id===modeleId).color} : null) : null;
     let photoId = existing?existing.photoId:null, photoUrl = existing?existing.photoUrl:null;
     const btnSave = document.getElementById('btnSave');
     if(pendingPhotoFile){
@@ -484,14 +627,14 @@ function openForm(existing, latlng){
     try{
       if(existing){
         await db.collection('items').doc(existing.id).update({
-          lat, lng, statut, notes, fields, photoId, photoUrl, updatedAt: Date.now()
+          lat, lng, statut, notes, fields, photoId, photoUrl, modele, updatedAt: Date.now()
         });
         toast('Fiche mise à jour.');
       } else {
         const numero = await nextNumero(v);
         const id = uid();
         await db.collection('items').doc(id).set({
-          id, volet:v, numero, lat, lng, statut, notes, fields, photoId, photoUrl,
+          id, volet:v, numero, lat, lng, statut, notes, fields, photoId, photoUrl, modele,
           createdAt: Date.now(), updatedAt: Date.now()
         });
         toast('Pancarte #'+numero+' ajoutée.');
@@ -561,7 +704,8 @@ function openDetail(id){
       <h2>#${esc(it.numero)} <span class="badge">${esc(VOLET_LABELS[it.volet])}</span></h2>
       <button class="iconbtn" id="btnCloseSheet">✕</button>
     </div>
-    <span class="statut-pill" style="background:${statutColor(it.volet,it.statut)}33;color:${statutColor(it.volet,it.statut)}">${esc(statutLabel)}</span>
+    <span class="statut-pill" style="background:${statutColor(it.volet,it.statut,it.modele&&it.modele.color)}33;color:${statutColor(it.volet,it.statut,it.modele&&it.modele.color)}">${esc(statutLabel)}</span>
+    ${it.modele?`<p><b>Modèle:</b> ${esc(it.modele.emoji||'')} ${esc(it.modele.label)}</p>`:''}
     ${it.photoUrl?`<img src="${it.photoUrl}" class="photo-preview" style="display:block">`:''}
     ${detailHtml}
     ${it.notes?`<p><b>Notes:</b> ${esc(it.notes)}</p>`:''}
@@ -636,6 +780,7 @@ function initDb(){
 /* ---------- Boot ---------- */
 initMap();
 initDb();
+initModelesDb();
 handleHash();
 
 })();

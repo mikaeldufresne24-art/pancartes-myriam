@@ -9,5 +9,8 @@ service cloud.firestore {
     match /counters/{counterId} {
       allow read, write: if true;
     }
+    match /modeles/{modeleId} {
+      allow read, write: if true;
+    }
   }
 }
