@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
-<title>Suivi des pancartes — Myriam</title>
+<title>Suivi des affiches — Myriam</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <style>
 /* ===== App styles ===== */
@@ -29,10 +29,12 @@ header{padding:10px 12px;background:var(--panel);border-bottom:1px solid var(--l
 .volet-btn[data-v="insp"].active{background:var(--insp)}
 .volet-btn[data-v="tous"].active{background:#555}
 .modeles-row{display:flex;flex-wrap:wrap;gap:6px;padding:2px 0 2px}
-.modele-chip{flex:0 0 auto;display:flex;align-items:center;gap:5px;padding:6px 10px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);font-size:12px;font-weight:600;cursor:grab;touch-action:none;user-select:none}
-.modele-chip.add{border-style:dashed;color:var(--muted);cursor:pointer}
+.modele-chip{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:6px 10px 6px 6px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);font-size:12px;font-weight:600;cursor:grab;touch-action:none;user-select:none}
+.modele-chip.add{padding:6px 10px;border-style:dashed;color:var(--muted);cursor:pointer}
 .modele-chip.dragging{opacity:.35}
-.modele-ghost{position:fixed;z-index:2000;background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:6px 12px;font-size:12px;font-weight:700;pointer-events:none;transform:translate(-50%,-120%);box-shadow:0 6px 18px rgba(0,0,0,.5);white-space:nowrap}
+.modele-chip img{width:22px;height:22px;object-fit:contain;border-radius:4px;background:#fff}
+.modele-ghost{position:fixed;z-index:2000;display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:6px 12px;font-size:12px;font-weight:700;pointer-events:none;transform:translate(-50%,-120%);box-shadow:0 6px 18px rgba(0,0,0,.5);white-space:nowrap}
+.modele-ghost img{width:22px;height:22px;object-fit:contain;border-radius:4px;background:#fff}
 #map.drop-hover{outline:3px dashed var(--accent);outline-offset:-3px}
 .iconbtn{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:8px 10px;font-size:13px;cursor:pointer}
 .iconbtn.primary{background:var(--accent);border-color:transparent;color:#fff;font-weight:700}
@@ -82,20 +84,21 @@ a{color:var(--accent)}
 /* Leaflet dark map pin label */
 .pin-label{background:rgba(0,0,0,.7);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:5px;white-space:nowrap;border:none;box-shadow:none}
 .pin-label::before{display:none}
+.pin-img{object-fit:contain;filter:drop-shadow(0 2px 5px rgba(0,0,0,.7));background:#fff;border-radius:6px;border:2px solid #fff}
 </style>
 </head>
 <body>
 <div id="app">
   <header>
     <div class="h-row">
-      <div class="h-title">🪧 Pancartes — Myriam</div>
+      <div class="h-title">🪧 Affiches — Myriam</div>
       <button class="iconbtn" id="btnGps" title="Me localiser">📍</button>
     </div>
     <div class="volets" id="volets">
       <button class="volet-btn" data-v="tous">Tout</button>
       <button class="volet-btn" data-v="vente">Mises en vente</button>
       <button class="volet-btn" data-v="pub">Publicité</button>
-      <button class="volet-btn" data-v="deneige">Déneigement</button>
+      <button class="volet-btn" data-v="deneige">Entretien</button>
       <button class="volet-btn" data-v="insp">Inspections</button>
     </div>
     <div class="modeles-row" id="modelesRow"></div>
@@ -141,13 +144,19 @@ function uid(){ return 'id'+Date.now().toString(36)+Math.random().toString(36).s
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function addDays(iso, days){ const d=new Date(iso+'T00:00:00'); d.setDate(d.getDate()+days); return d.toISOString().slice(0,10); }
 function fmtDate(iso){ if(!iso) return '—'; const [y,m,d]=iso.split('-'); return `${d}/${m}/${y}`; }
+// Miniature Cloudinary (transformation à la volée) pour ne pas charger l'image pleine résolution partout
+function cldThumb(url, w){
+  if(!url) return url;
+  const w2 = w||80;
+  return url.replace('/image/upload/', `/image/upload/w_${w2},c_limit,q_auto,f_auto/`);
+}
 
-const VOLET_LABELS = {vente:'Mise en vente', pub:'Publicité', deneige:'Déneigement', insp:'Inspection'};
+const VOLET_LABELS = {vente:'Mise en vente', pub:'Publicité', deneige:'Entretien de la maison', insp:'Inspection'};
 const VOLET_COLORS = {vente:'#4f8cff', pub:'#b36bf0', deneige:'#39b7c9', insp:'#e67e4d'};
 const STATUT_OPTIONS = {
   vente:   [['installee','Installée'],['a_retirer','À retirer'],['retiree','Retirée']],
   pub:     [['installee','Installée'],['a_verifier','À vérifier'],['a_retirer','À retirer'],['retiree','Retirée']],
-  deneige: [['en_place','Couvert'],['a_confirmer','À confirmer'],['manquant','Manquant'],['termine','Terminé']],
+  deneige: [['actif','Actif'],['a_confirmer','À confirmer'],['manquant','Problème / manquant'],['termine','Terminé (saison/contrat)']],
   insp:    [['actif','Actif'],['en_retard','En retard'],['termine','Terminé']]
 };
 function statutColor(volet, statut, modeleColor){
@@ -158,8 +167,8 @@ function statutColor(volet, statut, modeleColor){
 }
 
 /* ---------- State ---------- */
-let items=[]; // {id, volet, numero, lat, lng, statut, createdAt, fields:{...}, photoId, photoUrl, modele:{id,label,emoji,color}}
-let modeles=[]; // {id, volet, label, emoji, color}
+let items=[]; // {id, volet, numero, lat, lng, statut, createdAt, fields:{...}, photoId, photoUrl, modele:{id,label,emoji,color,imageUrl}}
+let modeles=[]; // {id, volet, label, emoji, color, imageUrl}
 let unsubscribe=null, modelesUnsub=null;
 let currentVolet='tous';
 let pendingLatLng=null;
@@ -188,20 +197,38 @@ function renderMarkers(){
   markersLayer.clearLayers();
   visibleItems().forEach(it=>{
     if(it.lat==null||it.lng==null) return;
-    const color = statutColor(it.volet, it.statut, it.modele&&it.modele.color);
-    const emoji = (it.modele&&it.modele.emoji) ? esc(it.modele.emoji)+' ' : '';
-    const icon = L.divIcon({
-      className:'',
-      html:`<div class="pin-label" style="transform:translateY(-26px)">${emoji}#${esc(it.numero)}</div>
-            <div style="width:22px;height:22px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:3px solid #fff;background:${color};box-shadow:0 2px 6px rgba(0,0,0,.6)"></div>`,
-      iconSize:[22,22], iconAnchor:[11,22]
-    });
-    const marker = L.marker([it.lat, it.lng], {icon}).addTo(markersLayer);
+    const img = it.modele && it.modele.imageUrl;
+    let icon;
+    if(img){
+      icon = L.divIcon({
+        className:'',
+        html:`<div class="pin-label" style="transform:translateY(-48px)">#${esc(it.numero)}</div>
+              <img class="pin-img" src="${esc(cldThumb(img,90))}" style="width:40px;height:40px">`,
+        iconSize:[40,40], iconAnchor:[20,40]
+      });
+    } else {
+      const color = statutColor(it.volet, it.statut, it.modele&&it.modele.color);
+      const emoji = (it.modele&&it.modele.emoji) ? esc(it.modele.emoji)+' ' : '';
+      icon = L.divIcon({
+        className:'',
+        html:`<div class="pin-label" style="transform:translateY(-26px)">${emoji}#${esc(it.numero)}</div>
+              <div style="width:22px;height:22px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);border:3px solid #fff;background:${color};box-shadow:0 2px 6px rgba(0,0,0,.6)"></div>`,
+        iconSize:[22,22], iconAnchor:[11,22]
+      });
+    }
+    const marker = L.marker([it.lat, it.lng], {icon, draggable:true}).addTo(markersLayer);
     marker.on('click', ()=> openDetail(it.id));
+    marker.on('dragend', async ()=>{
+      const p = marker.getLatLng();
+      try{
+        await db.collection('items').doc(it.id).update({ lat:p.lat, lng:p.lng, updatedAt:Date.now() });
+        toast('Position mise à jour.');
+      }catch(err){ toast('Erreur de déplacement: '+(err&&err.message||'inconnue')); }
+    });
   });
 }
 
-/* ---------- Modèles de pancarte (palette glisser-déposer) ---------- */
+/* ---------- Modèles d'affiche (palette glisser-déposer) ---------- */
 function modelesForView(){
   if(currentVolet==='tous') return modeles.slice().sort((a,b)=>a.volet.localeCompare(b.volet));
   return modeles.filter(m=>m.volet===currentVolet);
@@ -211,8 +238,8 @@ function renderPalette(){
   const list = modelesForView();
   wrap.innerHTML = list.map(m=>`
     <div class="modele-chip" data-id="${esc(m.id)}" style="border-left:4px solid ${esc(VOLET_COLORS[m.volet]||'#555')}">
-      <span>${esc(m.emoji||'🪧')}</span><span>${esc(m.label)}</span>
-    </div>`).join('') + `<div class="modele-chip add" id="btnAddModele">+ Modèle</div>`;
+      ${m.imageUrl?`<img src="${esc(cldThumb(m.imageUrl,44))}">`:`<span>${esc(m.emoji||'🪧')}</span>`}<span>${esc(m.label)}</span>
+    </div>`).join('') + `<div class="modele-chip add" id="btnAddModele">+ Affiche</div>`;
   [...wrap.querySelectorAll('.modele-chip:not(.add)')].forEach(chip=>{
     chip.addEventListener('pointerdown', (e)=>{
       const m = list.find(x=>x.id===chip.dataset.id);
@@ -230,7 +257,7 @@ function startDragModele(e, modele, chipEl){
   chipEl.classList.add('dragging');
   dragGhost = document.createElement('div');
   dragGhost.className = 'modele-ghost';
-  dragGhost.innerHTML = `${esc(modele.emoji||'🪧')} ${esc(modele.label)}`;
+  dragGhost.innerHTML = (modele.imageUrl?`<img src="${esc(cldThumb(modele.imageUrl,44))}">`:esc(modele.emoji||'🪧')) + ' ' + esc(modele.label);
   document.body.appendChild(dragGhost);
   moveGhost(e.clientX, e.clientY);
   const mapEl = document.getElementById('map');
@@ -265,21 +292,24 @@ function populateModeleSelect(volet, selectedId){
   const sel = document.getElementById('f_modele');
   if(!sel) return;
   const opts = modeles.filter(m=>m.volet===volet);
-  sel.innerHTML = `<option value="">Aucun modèle</option>` + opts.map(m=>
-    `<option value="${esc(m.id)}" ${m.id===selectedId?'selected':''}>${esc(m.emoji||'')} ${esc(m.label)}</option>`).join('');
+  sel.innerHTML = `<option value="">Aucune affiche</option>` + opts.map(m=>
+    `<option value="${esc(m.id)}" ${m.id===selectedId?'selected':''}>${esc(m.emoji||'🪧')} ${esc(m.label)}</option>`).join('');
 }
 
 function openAddModeleForm(){
   const fixedVolet = currentVolet==='tous' ? null : currentVolet;
   sheet.innerHTML = `
-    <div class="sheet-head"><h2>Nouveau modèle de pancarte</h2><button class="iconbtn" id="btnCloseSheet">✕</button></div>
+    <div class="sheet-head"><h2>Nouvelle affiche</h2><button class="iconbtn" id="btnCloseSheet">✕</button></div>
     ${!fixedVolet ? `
     <label>Volet</label>
     <select id="nm_volet">${Object.entries(VOLET_LABELS).map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select>` : `<div class="badge" style="margin-bottom:6px">${esc(VOLET_LABELS[fixedVolet])}</div>`}
-    <label>Emoji / icône</label>
+    <label>Nom de l'affiche</label>
+    <input type="text" id="nm_label" placeholder="Ex: Affiche de vente Vendirect">
+    <label>Emoji / icône (utilisé si pas de photo)</label>
     <input type="text" id="nm_emoji" maxlength="4" placeholder="🪧">
-    <label>Nom du modèle</label>
-    <input type="text" id="nm_label" placeholder="Ex: Pancarte Remax 4x8">
+    <label>Photo de l'affiche (optionnel — remplace l'emoji sur la carte)</label>
+    <input type="file" id="nm_photo" accept="image/*">
+    <img id="nmPhotoPreview" class="photo-preview" style="max-height:140px;object-fit:contain">
     <div class="btnrow">
       <button class="btn-cancel" id="btnCancel">Annuler</button>
       <button class="btn-save" id="btnSaveModele">Ajouter</button>
@@ -288,17 +318,35 @@ function openAddModeleForm(){
   overlay.classList.add('open');
   document.getElementById('btnCloseSheet').onclick = closeSheet;
   document.getElementById('btnCancel').onclick = closeSheet;
+  let pendingFile = null;
+  document.getElementById('nm_photo').onchange = (e)=>{
+    const file = e.target.files[0]; if(!file) return;
+    pendingFile = file;
+    const prev = document.getElementById('nmPhotoPreview');
+    prev.src = URL.createObjectURL(file); prev.style.display='block';
+  };
   document.getElementById('btnSaveModele').onclick = async ()=>{
     const v = fixedVolet || document.getElementById('nm_volet').value;
     const label = document.getElementById('nm_label').value.trim();
     const emoji = document.getElementById('nm_emoji').value.trim() || '🪧';
-    if(!label){ toast('Donne un nom au modèle.'); return; }
+    if(!label){ toast("Donne un nom à l'affiche."); return; }
     const id = uid();
+    const btn = document.getElementById('btnSaveModele');
+    let imageUrl = null;
+    if(pendingFile){
+      btn.disabled = true; btn.textContent = 'Téléversement de la photo…';
+      try{
+        const res = await uploadToCloudinary(pendingFile);
+        imageUrl = res.url;
+      }catch(err){ toast("Photo non téléversée: "+(err&&err.message||'erreur')); }
+    }
+    btn.disabled = true; btn.textContent = 'Enregistrement…';
     try{
-      await db.collection('modeles').doc(id).set({ id, volet:v, label, emoji, color:VOLET_COLORS[v], createdAt:Date.now() });
-      toast('Modèle ajouté — glisse-le sur la carte.');
+      await db.collection('modeles').doc(id).set({ id, volet:v, label, emoji, color:VOLET_COLORS[v], imageUrl, createdAt:Date.now() });
+      toast('Affiche ajoutée — glisse-la sur la carte.');
       closeSheet();
     }catch(err){ toast('Erreur: '+(err&&err.message||'inconnue')); }
+    finally{ if(btn){ btn.disabled=false; btn.textContent='Ajouter'; } }
   };
 }
 
@@ -306,10 +354,10 @@ function seedDefaultModeles(){
   const defaults = [
     {id:'default_vente_avendre', volet:'vente', label:'À vendre', emoji:'🏷️'},
     {id:'default_vente_vendue', volet:'vente', label:'Vendue / Réservée', emoji:'✅'},
-    {id:'default_pub_4x8', volet:'pub', label:'Pancarte 4 x 8', emoji:'🪧'},
+    {id:'default_pub_4x8', volet:'pub', label:'Affiche 4 x 8', emoji:'🪧'},
     {id:'default_pub_autre', volet:'pub', label:'Autre format', emoji:'📐'},
     {id:'default_pub_remorque', volet:'pub', label:'Remorque lettrée', emoji:'🚛'},
-    {id:'default_deneige_standard', volet:'deneige', label:'Affiche déneigement', emoji:'❄️'},
+    {id:'default_deneige_standard', volet:'deneige', label:'Entretien de la maison', emoji:'🏠'},
     {id:'default_insp_standard', volet:'insp', label:'Affiche inspection', emoji:'🔍'}
   ];
   defaults.forEach(m=>{
@@ -350,9 +398,11 @@ function renderList(filter){
   if(list.length===0){ wrap.innerHTML = `<div class="muted" style="padding:20px;text-align:center">Aucun élément.</div>`; return; }
   wrap.innerHTML = list.map(it=>{
     const color = statutColor(it.volet, it.statut, it.modele&&it.modele.color);
-    const emoji = (it.modele&&it.modele.emoji) ? esc(it.modele.emoji)+' ' : '';
+    const img = it.modele && it.modele.imageUrl;
+    const dotHtml = img ? `<img src="${esc(cldThumb(img,28))}" style="width:20px;height:20px;object-fit:contain;border-radius:4px;background:#fff;flex:0 0 auto">` : `<div class="dot" style="background:${color}"></div>`;
+    const emoji = (!img && it.modele&&it.modele.emoji) ? esc(it.modele.emoji)+' ' : '';
     return `<div class="item-row" data-id="${it.id}">
-      <div class="dot" style="background:${color}"></div>
+      ${dotHtml}
       <div class="meta">
         <div class="num">${emoji}#${esc(it.numero)} <span class="badge">${esc(VOLET_LABELS[it.volet])}</span></div>
         <div class="sub">${esc(itemSubtitle(it))}</div>
@@ -422,8 +472,8 @@ function fieldsHtml(volet, f){
     return `
       <label>Genre d'installation</label>
       <select id="f_genre">
-        <option value="pancarte_4x8" ${f.genre==='pancarte_4x8'?'selected':''}>Pancarte 4 x 8</option>
-        <option value="pancarte_autre" ${f.genre==='pancarte_autre'?'selected':''}>Autre format de pancarte</option>
+        <option value="affiche_4x8" ${f.genre==='affiche_4x8'?'selected':''}>Affiche 4 x 8</option>
+        <option value="affiche_autre" ${f.genre==='affiche_autre'?'selected':''}>Autre format d'affiche</option>
         <option value="remorque" ${f.genre==='remorque'?'selected':''}>Remorque lettrée</option>
       </select>
       <label>Propriétaire du terrain</label>
@@ -451,21 +501,47 @@ function fieldsHtml(volet, f){
       <label>Adresse de la maison</label>
       <input type="text" id="f_maisonAdresse" value="${esc(f.maisonAdresse)}">
       <div class="chk"><input type="checkbox" id="f_vacante" ${f.vacante?'checked':''}><span>Maison vacante</span></div>
-      <div class="section-title">Allée</div>
-      <label>Responsable du déneigement de l'allée</label>
-      <input type="text" id="f_alleeResponsable" value="${esc(f.alleeResponsable)}">
-      <label>Téléphone</label>
-      <input type="tel" id="f_alleeTel" value="${esc(f.alleeTel)}">
-      <div class="section-title">Stationnement</div>
+
+      <div class="section-title">Déneigement — Stationnement</div>
       <div class="chk"><input type="checkbox" id="f_contratStationnement" ${f.contratStationnement?'checked':''}><span>Contrat de déneigement du stationnement</span></div>
       <label>Entrepreneur</label>
       <input type="text" id="f_entrepreneur" value="${esc(f.entrepreneur)}">
-      <label>Téléphone entrepreneur</label>
+      <label>Téléphone</label>
       <input type="tel" id="f_entrepreneurTel" value="${esc(f.entrepreneurTel)}">
+      <label>Fréquence / détails</label>
+      <input type="text" id="f_frequenceNeige" value="${esc(f.frequenceNeige)}" placeholder="Ex: après chaque 10 cm">
+
+      <div class="section-title">Déneigement — Allée (entre le stationnement et la maison)</div>
+      <div class="chk"><input type="checkbox" id="f_ententeAllee" ${f.ententeAllee?'checked':''}><span>Entente de déneigement de l'allée</span></div>
+      <label>Responsable</label>
+      <input type="text" id="f_alleeResponsable" value="${esc(f.alleeResponsable)}">
+      <label>Téléphone</label>
+      <input type="tel" id="f_alleeTel" value="${esc(f.alleeTel)}">
+      <label>Fréquence / détails</label>
+      <input type="text" id="f_frequenceAllee" value="${esc(f.frequenceAllee)}">
+
       <div class="row2">
-        <div><label>Début du contrat</label><input type="date" id="f_dateDebut" value="${esc(f.dateDebut)}"></div>
-        <div><label>Fin du contrat</label><input type="date" id="f_dateFin" value="${esc(f.dateFin)}"></div>
+        <div><label>Début du/des contrat(s) de neige</label><input type="date" id="f_dateDebut" value="${esc(f.dateDebut)}"></div>
+        <div><label>Fin du/des contrat(s) de neige</label><input type="date" id="f_dateFin" value="${esc(f.dateFin)}"></div>
       </div>
+
+      <div class="section-title">Entretien du gazon</div>
+      <div class="chk"><input type="checkbox" id="f_contratGazon" ${f.contratGazon?'checked':''}><span>Contrat d'entretien du gazon</span></div>
+      <label>Entrepreneur</label>
+      <input type="text" id="f_entrepreneurGazon" value="${esc(f.entrepreneurGazon)}">
+      <label>Téléphone</label>
+      <input type="tel" id="f_entrepreneurGazonTel" value="${esc(f.entrepreneurGazonTel)}">
+      <label>Fréquence / détails</label>
+      <input type="text" id="f_frequenceGazon" value="${esc(f.frequenceGazon)}" placeholder="Ex: aux 2 semaines">
+
+      <div class="section-title">Entretien des plates-bandes</div>
+      <div class="chk"><input type="checkbox" id="f_contratPlatesBandes" ${f.contratPlatesBandes?'checked':''}><span>Contrat d'entretien des plates-bandes</span></div>
+      <label>Entrepreneur</label>
+      <input type="text" id="f_entrepreneurPlatesBandes" value="${esc(f.entrepreneurPlatesBandes)}">
+      <label>Téléphone</label>
+      <input type="tel" id="f_entrepreneurPlatesBandesTel" value="${esc(f.entrepreneurPlatesBandesTel)}">
+      <label>Fréquence / détails</label>
+      <input type="text" id="f_frequencePlatesBandes" value="${esc(f.frequencePlatesBandes)}">
     `;
   }
   if(volet==='insp'){
@@ -511,9 +587,11 @@ function readFields(volet){
   }
   if(volet==='deneige') return {
     maisonAdresse:g('f_maisonAdresse'), vacante:c('f_vacante'),
-    alleeResponsable:g('f_alleeResponsable'), alleeTel:g('f_alleeTel'),
-    contratStationnement:c('f_contratStationnement'), entrepreneur:g('f_entrepreneur'), entrepreneurTel:g('f_entrepreneurTel'),
-    dateDebut:g('f_dateDebut'), dateFin:g('f_dateFin')
+    contratStationnement:c('f_contratStationnement'), entrepreneur:g('f_entrepreneur'), entrepreneurTel:g('f_entrepreneurTel'), frequenceNeige:g('f_frequenceNeige'),
+    ententeAllee:c('f_ententeAllee'), alleeResponsable:g('f_alleeResponsable'), alleeTel:g('f_alleeTel'), frequenceAllee:g('f_frequenceAllee'),
+    dateDebut:g('f_dateDebut'), dateFin:g('f_dateFin'),
+    contratGazon:c('f_contratGazon'), entrepreneurGazon:g('f_entrepreneurGazon'), entrepreneurGazonTel:g('f_entrepreneurGazonTel'), frequenceGazon:g('f_frequenceGazon'),
+    contratPlatesBandes:c('f_contratPlatesBandes'), entrepreneurPlatesBandes:g('f_entrepreneurPlatesBandes'), entrepreneurPlatesBandesTel:g('f_entrepreneurPlatesBandesTel'), frequencePlatesBandes:g('f_frequencePlatesBandes')
   };
   if(volet==='insp') return {
     maisonAdresse:g('f_maisonAdresse'), assureur:g('f_assureur'), police:g('f_police'),
@@ -558,10 +636,10 @@ function openForm(existing, latlng, modelePrefill){
       <div><label>Latitude</label><input type="text" id="f_lat" value="${latlng?latlng.lat.toFixed(6):(existing?existing.lat:'')}"></div>
       <div><label>Longitude</label><input type="text" id="f_lng" value="${latlng?latlng.lng.toFixed(6):(existing?existing.lng:'')}"></div>
     </div>
-    <div class="hint">Touche la carte à l'endroit voulu, glisse un modèle de pancarte dessus, ou utilise 📍 pour ta position actuelle.</div>
+    <div class="hint">Touche la carte à l'endroit voulu, glisse une affiche dessus, ou utilise 📍 pour ta position actuelle. Une fois enregistrée, l'affiche peut aussi être déplacée directement sur la carte (glisser le pin).</div>
     <label>Statut</label>
     <select id="f_statut">${statutOpts}</select>
-    <label>Modèle (type de pancarte)</label>
+    <label>Affiche (type)</label>
     <select id="f_modele"></select>
     <div id="dynFields">${fieldsHtml(volet, existing?existing.fields:{})}</div>
     <label>Photo</label>
@@ -612,7 +690,8 @@ function openForm(existing, latlng, modelePrefill){
     const notes = document.getElementById('f_notes').value;
     const fields = readFields(v);
     const modeleId = document.getElementById('f_modele').value;
-    const modele = modeleId ? (modeles.find(m=>m.id===modeleId) ? {id:modeleId, label:modeles.find(m=>m.id===modeleId).label, emoji:modeles.find(m=>m.id===modeleId).emoji, color:modeles.find(m=>m.id===modeleId).color} : null) : null;
+    const modeleObj = modeleId ? modeles.find(m=>m.id===modeleId) : null;
+    const modele = modeleObj ? {id:modeleObj.id, label:modeleObj.label, emoji:modeleObj.emoji||null, color:modeleObj.color||null, imageUrl:modeleObj.imageUrl||null} : null;
     let photoId = existing?existing.photoId:null, photoUrl = existing?existing.photoUrl:null;
     const btnSave = document.getElementById('btnSave');
     if(pendingPhotoFile){
@@ -637,7 +716,7 @@ function openForm(existing, latlng, modelePrefill){
           id, volet:v, numero, lat, lng, statut, notes, fields, photoId, photoUrl, modele,
           createdAt: Date.now(), updatedAt: Date.now()
         });
-        toast('Pancarte #'+numero+' ajoutée.');
+        toast('Affiche #'+numero+' ajoutée.');
         setTimeout(()=>openDetail(id), 300);
       }
       closeSheet();
@@ -673,7 +752,7 @@ function openDetail(id){
     detailHtml = `<p><b>Adresse:</b> ${esc(f.adresse)}</p>${f.lien?`<p><b>Lien:</b> ${esc(f.lien)}</p>`:''}`;
   } else if(it.volet==='pub'){
     detailHtml = `
-      <p><b>Genre:</b> ${esc({pancarte_4x8:'Pancarte 4 x 8', pancarte_autre:'Autre pancarte', remorque:'Remorque lettrée'}[f.genre]||f.genre)}</p>
+      <p><b>Genre:</b> ${esc({affiche_4x8:'Affiche 4 x 8', pancarte_4x8:'Affiche 4 x 8', affiche_autre:"Autre format d'affiche", pancarte_autre:"Autre format d'affiche", remorque:'Remorque lettrée'}[f.genre]||f.genre)}</p>
       <p><b>Propriétaire:</b> ${esc(f.proprietaireNom)} ${f.proprietaireTel?('— '+esc(f.proprietaireTel)):''}</p>
       <p><b>Référence:</b> ${esc(f.reference)||'—'}</p>
       <p><b>Entente:</b> du ${fmtDate(f.dateEntente)} pour ${esc(f.dureeSemaines)} semaines (fin le ${fmtDate(f.dateFin)})</p>
@@ -683,9 +762,11 @@ function openDetail(id){
   } else if(it.volet==='deneige'){
     detailHtml = `
       <p><b>Maison:</b> ${esc(f.maisonAdresse)} ${f.vacante?'<span class="statut-pill" style="background:#e8a23d33;color:#e8a23d">Vacante</span>':''}</p>
-      <p><b>Allée:</b> ${esc(f.alleeResponsable)||'—'} ${f.alleeTel?('— '+esc(f.alleeTel)):''}</p>
-      <p><b>Stationnement:</b> ${f.contratStationnement?'Sous contrat':'Pas de contrat'} ${f.entrepreneur?('— '+esc(f.entrepreneur)+(f.entrepreneurTel?(' / '+esc(f.entrepreneurTel)):'')):''}</p>
-      <p><b>Période:</b> ${fmtDate(f.dateDebut)} → ${fmtDate(f.dateFin)}</p>
+      <p><b>Neige — Stationnement:</b> ${f.contratStationnement?'Sous contrat':'Pas de contrat'} ${f.entrepreneur?('— '+esc(f.entrepreneur)+(f.entrepreneurTel?(' / '+esc(f.entrepreneurTel)):'')):''} ${f.frequenceNeige?('— '+esc(f.frequenceNeige)):''}</p>
+      <p><b>Neige — Allée:</b> ${f.ententeAllee?'Entente en place':'Aucune entente'} ${f.alleeResponsable?('— '+esc(f.alleeResponsable)+(f.alleeTel?(' / '+esc(f.alleeTel)):'')):''} ${f.frequenceAllee?('— '+esc(f.frequenceAllee)):''}</p>
+      <p><b>Période (neige):</b> ${fmtDate(f.dateDebut)} → ${fmtDate(f.dateFin)}</p>
+      <p><b>Gazon:</b> ${f.contratGazon?'Sous contrat':'Pas de contrat'} ${f.entrepreneurGazon?('— '+esc(f.entrepreneurGazon)+(f.entrepreneurGazonTel?(' / '+esc(f.entrepreneurGazonTel)):'')):''} ${f.frequenceGazon?('— '+esc(f.frequenceGazon)):''}</p>
+      <p><b>Plates-bandes:</b> ${f.contratPlatesBandes?'Sous contrat':'Pas de contrat'} ${f.entrepreneurPlatesBandes?('— '+esc(f.entrepreneurPlatesBandes)+(f.entrepreneurPlatesBandesTel?(' / '+esc(f.entrepreneurPlatesBandesTel)):'')):''} ${f.frequencePlatesBandes?('— '+esc(f.frequencePlatesBandes)):''}</p>
     `;
   } else if(it.volet==='insp'){
     const chkList = [['chk_eau',"Pas de dégât d'eau"],['chk_chauffage','Chauffage OK'],['chk_toiture','Toiture OK'],['chk_portes','Portes/fenêtres verrouillées'],['chk_intrusion','Aucune intrusion'],['chk_deneige','Déneigement fait']];
@@ -705,11 +786,12 @@ function openDetail(id){
       <button class="iconbtn" id="btnCloseSheet">✕</button>
     </div>
     <span class="statut-pill" style="background:${statutColor(it.volet,it.statut,it.modele&&it.modele.color)}33;color:${statutColor(it.volet,it.statut,it.modele&&it.modele.color)}">${esc(statutLabel)}</span>
-    ${it.modele?`<p><b>Modèle:</b> ${esc(it.modele.emoji||'')} ${esc(it.modele.label)}</p>`:''}
+    ${it.modele?`<p><b>Affiche:</b> ${it.modele.imageUrl?`<img src="${esc(cldThumb(it.modele.imageUrl,60))}" style="height:28px;vertical-align:middle;border-radius:4px;background:#fff;margin-right:6px">`:esc(it.modele.emoji||'')} ${esc(it.modele.label)}</p>`:''}
     ${it.photoUrl?`<img src="${it.photoUrl}" class="photo-preview" style="display:block">`:''}
     ${detailHtml}
     ${it.notes?`<p><b>Notes:</b> ${esc(it.notes)}</p>`:''}
     <p class="muted" style="font-size:11px">Créée le ${new Date(it.createdAt).toLocaleDateString('fr-CA')}</p>
+    <p class="hint">Astuce: tu peux glisser cette affiche directement sur la carte pour corriger sa position.</p>
     <div id="qrHost" class="qr-wrap"></div>
     <div class="btnrow">
       <button class="btn-cancel" id="btnCenterMap">Centrer sur la carte</button>
@@ -746,7 +828,7 @@ function renderQr(it){
     ctx.font = '16px sans-serif';
     ctx.fillText(VOLET_LABELS[it.volet], out.width/2, 400);
     const link = document.createElement('a');
-    link.download = 'pancarte-'+it.numero+'.png';
+    link.download = 'affiche-'+it.numero+'.png';
     link.href = out.toDataURL('image/png');
     link.click();
   };
