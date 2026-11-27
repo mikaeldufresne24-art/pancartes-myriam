@@ -29,9 +29,11 @@ header{padding:10px 12px;background:var(--panel);border-bottom:1px solid var(--l
 .volet-btn[data-v="insp"].active{background:var(--insp)}
 .volet-btn[data-v="tous"].active{background:#555}
 .modeles-row{display:flex;flex-wrap:wrap;gap:6px;padding:2px 0 2px}
-.modele-chip{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:6px 10px 6px 6px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);font-size:12px;font-weight:600;cursor:grab;touch-action:none;user-select:none}
+.modele-chip{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:6px 20px 6px 6px;border-radius:10px;background:var(--panel2);border:1px solid var(--line);font-size:12px;font-weight:600;cursor:grab;touch-action:none;user-select:none;position:relative}
 .modele-chip.add{padding:6px 10px;border-style:dashed;color:var(--muted);cursor:pointer}
 .modele-chip.dragging{opacity:.35}
+.modele-del{position:absolute;top:3px;right:5px;font-size:10px;color:var(--muted);opacity:.6;cursor:pointer;line-height:1}
+.modele-del:hover{opacity:1;color:var(--danger)}
 .modele-chip img{width:22px;height:22px;object-fit:contain;border-radius:4px;background:#fff}
 .modele-ghost{position:fixed;z-index:2000;display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:6px 12px;font-size:12px;font-weight:700;pointer-events:none;transform:translate(-50%,-120%);box-shadow:0 6px 18px rgba(0,0,0,.5);white-space:nowrap}
 .modele-ghost img{width:22px;height:22px;object-fit:contain;border-radius:4px;background:#fff}
@@ -239,11 +241,25 @@ function renderPalette(){
   wrap.innerHTML = list.map(m=>`
     <div class="modele-chip" data-id="${esc(m.id)}" style="border-left:4px solid ${esc(VOLET_COLORS[m.volet]||'#555')}">
       ${m.imageUrl?`<img src="${esc(cldThumb(m.imageUrl,44))}">`:`<span>${esc(m.emoji||'🪧')}</span>`}<span>${esc(m.label)}</span>
+      <span class="modele-del" data-id="${esc(m.id)}" title="Supprimer cette affiche">✕</span>
     </div>`).join('') + `<div class="modele-chip add" id="btnAddModele">+ Affiche</div>`;
   [...wrap.querySelectorAll('.modele-chip:not(.add)')].forEach(chip=>{
     chip.addEventListener('pointerdown', (e)=>{
+      if(e.target.closest('.modele-del')) return;
       const m = list.find(x=>x.id===chip.dataset.id);
       if(m) startDragModele(e, m, chip);
+    });
+  });
+  [...wrap.querySelectorAll('.modele-del')].forEach(del=>{
+    del.addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      const m = list.find(x=>x.id===del.dataset.id);
+      if(!m) return;
+      if(!confirm(`Supprimer l'affiche "${m.label}" de la liste? (les pins déjà posés sur la carte garderont leur image)`)) return;
+      try{
+        await db.collection('modeles').doc(m.id).delete();
+        toast('Affiche supprimée de la liste.');
+      }catch(err){ toast('Erreur: '+(err&&err.message||'inconnue')); }
     });
   });
   const btnAdd = document.getElementById('btnAddModele');
@@ -354,8 +370,7 @@ function seedDefaultModeles(){
   const defaults = [
     {id:'default_vente_avendre', volet:'vente', label:'À vendre', emoji:'🏷️'},
     {id:'default_vente_vendue', volet:'vente', label:'Vendue / Réservée', emoji:'✅'},
-    {id:'default_pub_4x8', volet:'pub', label:'Affiche 4 x 8', emoji:'🪧'},
-    {id:'default_pub_autre', volet:'pub', label:'Autre format', emoji:'📐'},
+    {id:'default_pub_4x8', volet:'pub', label:'Affiche publicitaire', emoji:'🪧'},
     {id:'default_pub_remorque', volet:'pub', label:'Remorque lettrée', emoji:'🚛'},
     {id:'default_deneige_standard', volet:'deneige', label:'Entretien de la maison', emoji:'🏠'},
     {id:'default_insp_standard', volet:'insp', label:'Affiche inspection', emoji:'🔍'}
